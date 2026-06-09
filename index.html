@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Void Runner</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;height:100vh;font-family:'Segoe UI',system-ui,sans-serif}
+canvas{display:block;width:100%;height:100vh}
+#ui{position:fixed;top:0;left:0;right:0;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg,rgba(0,0,0,.7),transparent);pointer-events:none}
+#ui h1{font-size:1.2rem;background:linear-gradient(135deg,#f0a,#a0f);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:700}
+#ui .stats{font-size:.75rem;color:rgba(200,200,255,.6)}
+#ui .stats span{color:#f0a;font-weight:600;font-size:1rem}
+#overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);backdrop-filter:blur(8px);z-index:10;transition:opacity .3s}
+#overlay.hidden{opacity:0;pointer-events:none}
+#start-box{text-align:center}
+#start-box h2{font-size:2rem;background:linear-gradient(135deg,#f0a,#a0f,#0af);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
+#start-box p{color:rgba(200,200,255,.5);font-size:.8rem;margin-bottom:20px}
+#start-box button{padding:12px 40px;border:1px solid rgba(255,100,150,.4);background:linear-gradient(135deg,rgba(255,0,100,.2),rgba(100,0,255,.2));color:#f0a;border-radius:10px;cursor:pointer;font-size:1rem;transition:all .2s;pointer-events:auto}
+#start-box button:hover{background:linear-gradient(135deg,rgba(255,0,100,.4),rgba(100,0,255,.4));transform:scale(1.05)}
+#controls-hint{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);font-size:.65rem;color:rgba(150,150,200,.3);pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="ui">
+<h1>🚀 VOID RUNNER</h1>
+<div class="stats">Score: <span id="score">0</span> | Speed: <span id="speed">1.0</span>x | FPS: <span id="fps">0</span></div>
+</div>
+<div id="overlay">
+<div id="start-box">
+<h2>VOID RUNNER</h2>
+<p>Navigate the infinite procedural tunnel.<br>Avoid obstacles. Survive.</p>
+<button id="start-btn">LAUNCH</button>
+</div>
+</div>
+<div id="controls-hint">← → or A/D to steer • SPACE to boost</div>
+<script>
+const canvas=document.getElementById('gl');
+const gl=canvas.getContext('webgl')||canvas.getContext('experimental-webgl');
+let W,H;
+
+function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;gl.viewport(0,0,W,H)}
+window.addEventListener('resize',resize);resize();
+
+// ── Shaders ──
+const vsrc=`attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}`;
+const fsrc=`precision highp float;
+uniform float t,sp,score;
+uniform vec2 res;
+uniform float playerX;
+#define PI 3.14159265
+
+// Noise
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);float a=hash(i),b=hash(i+vec2(1,0)),c=hash(i+vec2(0,1)),d=hash(i+vec2(1,1));vec2 u=f*f*(3.-2.*f);return mix(a,b,u.x)+(c-a)*u.y*(1.-u.x)+(d-b)*u.x*u.y;}
+float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<5;i++){v+=a*noise(p);p*=2.;a*=.5;}return v;}
+
+void main(){
+  vec2 uv=gl_FragCoord.xy/res;
+  vec2 p=uv*2.-1.;
+  p.x*=res.x/res.y;
+  
+  // Tunnel depth
+  float depth=p.y*.5+.5;
+  float tunnelZ=1./(depth+.1);
+  
+  // Tunnel shape
+  float angle=atan(p.x,p.y*2.);
+  float radius=length(p);
+  
+  // Procedural tunnel walls
+  float tunnel=sin(angle*6.+t*2.)*.1+sin(angle*3.-t*1.5)*.05;
+  float wallDist=abs(radius-.4-tunnel);
+  
+  // Rings
+  float rings=smoothstep(.02,0.,abs(fract(tunnelZ*.5-t*sp*.3)-.5)-.01);
+  
+  // Obstacles
+  float obs=0.;
+  for(int i=0;i<8;i++){
+    float fi=float(i);
+    float oz=mod(fi*3.7-t*sp*.2,20.)-10.;
+    float oa=fi*1.3+floor(fi/4.)*PI*.5;
+    float orad=.08+mod(fi*1.1,.06);
+    vec2 op=vec2(sin(oa),cos(oa))*(.35+tunnel*.05);
+    float od=1./(abs(p.y-oz/res.y*2.)+.01);
+    vec2 opp=vec2(p.x*od,0.);
+    float d=distance(opp,op*od);
+    obs+=smoothstep(orad*od,.0,d);
+  }
+  
+  // Player ship
+  float shipDist=distance(vec2(p.x,p.y+.6),vec2(playerX*.3,0.));
+  float ship=smoothstep(.06,.04,shipDist);
+  float shipGlow=smoothstep(.15,0.,shipDist);
+  
+  // Colors
+  vec3 col=vec3(0.);
+  // Background void
+  col+=vec3(.02,.01,.05)*(1.-depth);
+  // Tunnel walls
+  float wallGlow=smoothstep(.15,.0,wallDist)*.3;
+  col+=vec3(.2,.1,.4)*wallGlow;
+  // Rings
+  col+=vec3(.4,.2,.8)*rings*.5;
+  // Obstacles (red danger)
+  col+=vec3(.8,.1,.2)*obs;
+  col+=vec3(1.,.3,.1)*obs*.5;
+  // Ship
+  col+=vec3(.2,.6,1.)*ship;
+  col+=vec3(.4,.8,1.)*shipGlow*.5;
+  
+  // Speed lines
+  float lines=0.;
+  for(int i=0;i<20;i++){
+    float fi=float(i);
+    float lx=hash(vec2(fi,0.))-.5;
+    float ly=mod(hash(vec2(fi,1.))-t*sp*.5,2.)-1.;
+    float ld=abs(p.x-lx);
+    float speedLine=smoothstep(.005,.0,ld)*smoothstep(.1,.0,abs(ly-p.y));
+    lines+=speedLine;
+  }
+  col+=vec3(.3,.4,.8)*lines*.15;
+  
+  // Motion blur (radial)
+  float blur=smoothstep(.3,1.,radius);
+  col*=1.-blur*.5;
+  
+  // Vignette
+  float vig=1.-dot(uv-.5,uv-.5)*1.5;
+  col*=vig;
+  
+  // Chromatic aberration at edges
+  col.rb*=1.+p.x*.1;
+  
+  // Boost effect
+  float boost=smoothstep(1.5,3.,sp);
+  col+=vec3(.1,.05,.2)*boost*sin(t*10.)*.5;
+  
+  gl_FragColor=vec4(col,1.);
+}`;
+
+function compileShader(src,type){
+  const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+const prog=gl.createProgram();
+gl.attachShader(prog,compileShader(vsrc,gl.VERTEX_SHADER));
+gl.attachShader(prog,compileShader(fsrc,gl.FRAGMENT_SHADER));
+gl.linkProgram(prog);gl.useProgram(prog);
+
+const buf=gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+const aPos=gl.getAttribLocation(prog,'a');
+gl.enableVertexAttribArray(aPos);gl.vertexAttribPointer(aPos,2,gl.FLOAT,false,0,0);
+
+const uTime=gl.getUniformLocation(prog,'t');
+const uSpd=gl.getUniformLocation(prog,'sp');
+const uRes=gl.getUniformLocation(prog,'res');
+const uScore=gl.getUniformLocation(prog,'score');
+const uPX=gl.getUniformLocation(prog,'playerX');
+
+// ── Game state ──
+let running=false,time=0,speed=1,playerX=0,score=0,boosting=false;
+const keys={};
+
+document.addEventListener('keydown',e=>{keys[e.code]=true;if(e.code==='Space'){boosting=true;e.preventDefault()}});
+document.addEventListener('keyup',e=>{keys[e.code]=false;if(e.code==='Space')boosting=false});
+document.addEventListener('touchmove',e=>{e.preventDefault();playerX=(e.touches[0].clientX/W-.5)*2},{passive:false});
+document.getElementById('start-btn').onclick=()=>{running=true;document.getElementById('overlay').classList.add('hidden')};
+
+let fc=0,lt=performance.now();
+function loop(){
+  const now=performance.now(),dt=(now-lt)/1000;lt=now;fc++;
+  if(running){
+    time+=dt*speed;
+    if(keys['ArrowLeft']||keys['KeyA'])playerX-=dt*2;
+    if(keys['ArrowRight']||keys['KeyD'])playerX+=dt*2;
+    playerX=Math.max(-1,Math.min(1,playerX));
+    if(boosting){speed=Math.min(4,speed+dt*2);score+=dt*30*speed}
+    else{speed=Math.max(1,speed-dt*.5);score+=dt*10*speed}
+    document.getElementById('score').textContent=Math.floor(score);
+    document.getElementById('speed').textContent=speed.toFixed(1);
+  }
+  gl.uniform1f(uTime,time);
+  gl.uniform1f(uSpd,speed);
+  gl.uniform2f(uRes,W,H);
+  gl.uniform1f(uScore,score);
+  gl.uniform1f(uPX,playerX);
+  gl.drawArrays(gl.TRIANGLES,0,6);
+  requestAnimationFrame(loop);
+}
+loop();
+setInterval(()=>{document.getElementById('fps').textContent=fc;fc=0},1000);
+</script>
+</body>
+</html>
